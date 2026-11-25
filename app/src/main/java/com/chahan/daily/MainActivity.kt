@@ -326,7 +326,7 @@ class MainActivity : AppCompatActivity() {
                     setOnClickListener { editCustom(day, it2.custom, a) }
                 })
             }
-            if (i < n && starting.isEmpty() && covering.isEmpty()) {
+            if (editMode && i < n && starting.isEmpty() && covering.isEmpty()) {
                 cell.addView(label("＋", 16f, colorId = R.color.text_sub).apply {
                     setPadding(dpi(10), dpi(6), 0, dpi(6))
                 })

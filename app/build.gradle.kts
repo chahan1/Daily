@@ -11,8 +11,8 @@ android {
         applicationId = "com.chahan.daily"
         minSdk = 29
         targetSdk = 34
-        versionCode = 3
-        versionName = "0.3"
+        versionCode = 4
+        versionName = "0.3.1"
     }
 
     // 固定簽署金鑰：每次編譯的 APK 簽章相同，才能直接覆蓋安裝更新

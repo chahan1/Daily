@@ -50,3 +50,4 @@ APK：https://github.com/chahan1/daily/releases/download/latest/daily.apk
 - 0.1：第一版
 - 0.2：時間表（30／40 分鐘一格）、固定項目、自訂行程
 - 0.3：時間表加「編輯」模式，平時隱藏空格與「＋」
+- 0.3.1：修正非編輯模式下，有提醒的時段仍出現「＋」
