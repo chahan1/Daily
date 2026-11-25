@@ -29,6 +29,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var store: Store
     private lateinit var root: LinearLayout
     private var timer: CountDownTimer? = null
+    /** 時間表編輯模式：開啟時才顯示空格和「＋」。每次打開 App 預設關閉。 */
+    private var editMode = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -272,8 +274,13 @@ class MainActivity : AppCompatActivity() {
         val s = store.settings
         val slot = s.slotMinutes
         val c = card()
-        c.addView(label("今天的時間表", 16f, true))
-        c.addView(label("🔒 是固定的項目。空格點「＋」加入行程，點行程可修改、延長、縮短或刪除。每格 $slot 分鐘。",
+        val head = hbox()
+        head.addView(label("今天的時間表", 16f, true).lp(0, weight = 1f))
+        head.addView(pill(if (editMode) "完成" else "編輯", editMode) { editMode = !editMode; render() })
+        c.addView(head.lp(ViewGroup.LayoutParams.MATCH_PARENT))
+        c.addView(label(if (editMode)
+            "空格點「＋」加入行程，點行程可修改、延長、縮短或刪除。每格 $slot 分鐘。"
+        else "🔒 是固定的項目。按「編輯」可加入行程。",
             13f, colorId = R.color.text_sub).lp(top = 4))
 
         val items = Reminders.itemsFor(day, s)
@@ -288,9 +295,18 @@ class MainActivity : AppCompatActivity() {
         val nextKey = items.firstOrNull { it.at.isAfter(now) && it.key !in log.done }?.key
         val n = (bed - wake + slot - 1) / slot
 
+        var lastShown = false
         for (i in 0..n) {
             val a = wake + i * slot
             val b = if (i == n) Int.MAX_VALUE else a + slot
+            // 非編輯模式：沒有任何項目的空格整列隱藏，畫面比較短
+            val empty = builtins.none { rel(it) in a until b } &&
+                customs.none { val r = rel(it); r in a until b || (r < a && r + it.custom!!.slots * slot > a) }
+            if (!editMode && empty) continue
+            if (lastShown) c.addView(android.view.View(this).apply {
+                setBackgroundColor(col(R.color.soft))
+            }.lp(ViewGroup.LayoutParams.MATCH_PARENT, dpi(1)))
+            lastShown = true
             val row = hbox()
             row.gravity = Gravity.TOP
             val nowIn = now.isAfter(start0.plusMinutes(a.toLong())) && now.isBefore(start0.plusMinutes(minOf(b, a + slot).toLong()))
@@ -318,9 +334,6 @@ class MainActivity : AppCompatActivity() {
             }
             row.addView(cell.lp(0, weight = 1f))
             c.addView(row.lp(ViewGroup.LayoutParams.MATCH_PARENT))
-            if (i < n) c.addView(android.view.View(this).apply {
-                setBackgroundColor(col(R.color.soft))
-            }.lp(ViewGroup.LayoutParams.MATCH_PARENT, dpi(1)))
         }
         root.addView(c)
     }
