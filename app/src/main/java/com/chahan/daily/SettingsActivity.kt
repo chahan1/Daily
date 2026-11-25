@@ -53,6 +53,17 @@ class SettingsActivity : AppCompatActivity() {
             13f, colorId = R.color.text_sub).lp(top = 10))
         root.addView(t)
 
+        // 時間表一格幾分鐘
+        val g = card()
+        g.addView(label("🗓️ 時間表一格幾分鐘", 16f, true))
+        g.addView(label("自訂行程的開始時間和長度都以「格」為單位調整。", 13f, colorId = R.color.text_sub).lp(top = 4))
+        val gr = hbox()
+        for (m in listOf(30, 40)) {
+            gr.addView(pill("$m 分鐘", s.slotMinutes == m) { s.slotMinutes = m; render() }.lp(end = 8))
+        }
+        g.addView(gr.lp(top = 8))
+        root.addView(g)
+
         // 喝水次數
         val w = card()
         w.addView(label("💧 一天提醒喝水幾次", 16f, true))

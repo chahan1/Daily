@@ -19,7 +19,11 @@ data class Item(
     val kind: Kind,
     val day: LocalDate,   // 這一天的「起床日」
     val at: LocalDateTime,
+    val custom: Custom? = null,   // 自訂行程才有
 ) {
+    val notify: Boolean get() = custom?.notify ?: true
+    val locked: Boolean get() = custom?.locked ?: false
+
     val millis: Long get() = at.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
 }
 
@@ -106,6 +110,14 @@ object Reminders {
         add("checkin", "checkin", bed - 60)
         add("winddown", "winddown", bed - 30)
         add("bed", "bed", bed)
+
+        // 自訂行程
+        for (c in s.customs()) {
+            if (!c.activeOn(day)) continue
+            val k = Kind("c_${c.id}", "📌", c.title.ifBlank { "（未命名）" },
+                c.note.ifBlank { "照你排好的時間開始" }, "這是你自己排進時間表的行程。")
+            list += Item("c_${c.id}", k, day, at(inDay(c.start)), c)
+        }
         return list.sortedBy { it.at }
     }
 
@@ -119,7 +131,7 @@ object Reminders {
     fun nextItems(s: Settings, afterMillis: Long): List<Item> {
         val today = LocalDate.now()
         val all = (-1..2).flatMap { itemsFor(today.plusDays(it.toLong()), s) }
-            .filter { it.millis > afterMillis }
+            .filter { it.millis > afterMillis && it.notify }
             .sortedBy { it.millis }
         if (all.isEmpty()) return emptyList()
         val first = all.first().millis

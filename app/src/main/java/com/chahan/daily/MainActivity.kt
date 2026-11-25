@@ -18,6 +18,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.SwitchCompat
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -268,61 +269,255 @@ class MainActivity : AppCompatActivity() {
 
     // ---------- 今天的提醒 ----------
     private fun timelineCard(day: LocalDate, log: DayLog) {
+        val s = store.settings
+        val slot = s.slotMinutes
         val c = card()
-        c.addView(label("今天的提醒", 16f, true))
-        c.addView(label("點項目看「為什麼」，點右邊圓圈標記完成。", 13f, colorId = R.color.text_sub).lp(top = 4))
-        val items = Reminders.itemsFor(day, store.settings)
+        c.addView(label("今天的時間表", 16f, true))
+        c.addView(label("🔒 是固定的項目。空格點「＋」加入行程，點行程可修改、延長、縮短或刪除。每格 $slot 分鐘。",
+            13f, colorId = R.color.text_sub).lp(top = 4))
+
+        val items = Reminders.itemsFor(day, s)
         val now = LocalDateTime.now()
+        val start0 = day.atStartOfDay()
+        fun rel(i: Item) = java.time.Duration.between(start0, i.at).toMinutes().toInt()
+        val wake = s.wake
+        var bed = s.bed
+        if (bed <= wake) bed += 1440
+        val builtins = items.filter { it.custom == null }
+        val customs = items.filter { it.custom != null }
         val nextKey = items.firstOrNull { it.at.isAfter(now) && it.key !in log.done }?.key
-        if (items.isEmpty()) c.addView(label("所有提醒都關掉了，可以到「設定」打開。", 14f).lp(top = 10))
-        for (item in items) {
-            val done = item.key in log.done
-            val past = item.at.isBefore(now)
+        val n = (bed - wake + slot - 1) / slot
+
+        for (i in 0..n) {
+            val a = wake + i * slot
+            val b = if (i == n) Int.MAX_VALUE else a + slot
             val row = hbox()
-            row.setPadding(dpi(10), dpi(10), dpi(6), dpi(10))
-            if (item.key == nextKey) row.background = rounded(col(R.color.soft), 12f)
-            val time = label(item.at.format(DateTimeFormatter.ofPattern("HH:mm")), 14f,
-                colorId = R.color.text_sub).apply { minWidth = dpi(52) }
-            val title = label("${item.kind.emoji}  ${item.kind.title}", 15f,
-                colorId = if (done || (past && item.key != nextKey)) R.color.text_sub else R.color.text)
-            if (item.key == nextKey) title.typeface = android.graphics.Typeface.DEFAULT_BOLD
-            val check = TextView(this).apply {
-                text = if (done) "✓" else ""
-                gravity = Gravity.CENTER
-                setTextColor(col(R.color.white))
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-                background = if (done) rounded(col(R.color.done), 14f)
-                else rounded(col(R.color.card), 14f, col(R.color.text_sub))
-                setOnClickListener { _ ->
-                    store.update(day) { l ->
-                        if (done) l.done.remove(item.key) else l.done.add(item.key)
-                    }
-                    render()
-                }
+            row.gravity = Gravity.TOP
+            val nowIn = now.isAfter(start0.plusMinutes(a.toLong())) && now.isBefore(start0.plusMinutes(minOf(b, a + slot).toLong()))
+            row.addView(label(fmt(a), 13f, nowIn, if (nowIn) R.color.brand else R.color.text_sub)
+                .apply { minWidth = dpi(50); setPadding(0, dpi(9), 0, 0) })
+            val cell = vbox()
+            // 這一格內的內建提醒
+            builtins.filter { rel(it) in a until b }.forEach { cell.addView(builtinRow(day, it, log, it.key == nextKey)) }
+            // 從這一格開始的自訂行程
+            val starting = customs.filter { rel(it) in a until b }
+            starting.forEach { cell.addView(customRow(day, it, log, slot, it.key == nextKey)) }
+            // 被前面行程延續佔用
+            val covering = customs.filter { val r = rel(it); r < a && r + it.custom!!.slots * slot > a }
+            covering.forEach { it2 ->
+                cell.addView(label("↳ ${it2.kind.title}", 13f, colorId = R.color.text_sub).apply {
+                    setPadding(dpi(10), dpi(8), 0, dpi(8))
+                    setOnClickListener { editCustom(day, it2.custom, a) }
+                })
             }
-            row.addView(time)
-            row.addView(title.lp(0, weight = 1f))
-            row.addView(check.lp(dpi(28), dpi(28)))
-            row.setOnClickListener { _ -> showWhy(item) }
-            c.addView(row.lp(ViewGroup.LayoutParams.MATCH_PARENT, top = 2))
+            if (i < n && starting.isEmpty() && covering.isEmpty()) {
+                cell.addView(label("＋", 16f, colorId = R.color.text_sub).apply {
+                    setPadding(dpi(10), dpi(6), 0, dpi(6))
+                })
+                row.setOnClickListener { editCustom(day, null, a) }
+            }
+            row.addView(cell.lp(0, weight = 1f))
+            c.addView(row.lp(ViewGroup.LayoutParams.MATCH_PARENT))
+            if (i < n) c.addView(android.view.View(this).apply {
+                setBackgroundColor(col(R.color.soft))
+            }.lp(ViewGroup.LayoutParams.MATCH_PARENT, dpi(1)))
         }
         root.addView(c)
     }
 
-    private fun showWhy(item: Item) {
-        val b = AlertDialog.Builder(this)
-            .setTitle("${item.kind.emoji} ${item.kind.title}")
-            .setMessage("${item.kind.body}\n\n為什麼：\n${item.kind.why}")
-            .setPositiveButton("知道了", null)
-        when (item.kind.key) {
-            "learn" -> b.setNeutralButton("打開英文筆記本") { _, _ ->
-                startActivity(Alarms.engIntent(this).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    private fun checkCircle(day: LocalDate, key: String, done: Boolean): TextView = TextView(this).apply {
+        text = if (done) "✓" else ""
+        gravity = Gravity.CENTER
+        setTextColor(col(R.color.white))
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        background = if (done) rounded(col(R.color.done), 13f)
+        else rounded(col(R.color.card), 13f, col(R.color.text_sub))
+        setOnClickListener {
+            store.update(day) { l -> if (done) l.done.remove(key) else l.done.add(key) }
+            render()
+        }
+    }
+
+    private fun builtinRow(day: LocalDate, item: Item, log: DayLog, next: Boolean): LinearLayout {
+        val done = item.key in log.done
+        val row = hbox()
+        row.setPadding(dpi(10), dpi(7), dpi(4), dpi(7))
+        if (next) row.background = rounded(col(R.color.soft), 10f)
+        val lock = if (store.settings.locked(item.kind.key)) "🔒 " else ""
+        val t = label("$lock${item.kind.emoji} ${item.kind.title}  ${item.at.format(DateTimeFormatter.ofPattern("HH:mm"))}",
+            14f, next, if (done) R.color.text_sub else R.color.text)
+        row.addView(t.lp(0, weight = 1f))
+        row.addView(checkCircle(day, item.key, done).lp(dpi(26), dpi(26)))
+        row.setOnClickListener { showWhy(item) }
+        return row
+    }
+
+    private fun customRow(day: LocalDate, item: Item, log: DayLog, slot: Int, next: Boolean): LinearLayout {
+        val cu = item.custom!!
+        val done = item.key in log.done
+        val row = hbox()
+        row.setPadding(dpi(10), dpi(8), dpi(4), dpi(8))
+        row.background = rounded(col(R.color.soft), 10f, if (next) col(R.color.brand) else null)
+        val box = vbox()
+        val lock = if (cu.locked) "🔒 " else ""
+        val bell = if (cu.notify) "" else " 🔕"
+        box.addView(label("$lock📌 ${item.kind.title}$bell", 15f, true, if (done) R.color.text_sub else R.color.text))
+        val end = cu.start + cu.slots * slot
+        val repeat = when {
+            cu.days == 0 -> "只有今天"
+            cu.days == Custom.EVERY_DAY -> "每天"
+            cu.days == Custom.WEEKDAYS -> "平日"
+            else -> "每週 " + (0..6).filter { cu.days and (1 shl it) != 0 }.joinToString("、") { WEEK[it] }
+        }
+        box.addView(label("${fmt(cu.start)}–${fmt(end)}・$repeat" +
+            (if (cu.note.isNotBlank()) "\n${cu.note}" else ""), 12f, colorId = R.color.text_sub))
+        row.addView(box.lp(0, weight = 1f))
+        row.addView(checkCircle(day, item.key, done).lp(dpi(26), dpi(26)))
+        row.setOnClickListener { editCustom(day, cu, cu.start) }
+        return row
+    }
+
+    /** 新增或修改自訂行程。c == null 代表新增，startMin 是點的那一格。 */
+    private fun editCustom(day: LocalDate, c0: Custom?, startMin: Int) {
+        val s = store.settings
+        val slot = s.slotMinutes
+        if (c0 != null && c0.locked) {
+            AlertDialog.Builder(this)
+                .setTitle("🔒 ${c0.title}")
+                .setMessage("這個行程已固定（${fmt(c0.start)} 開始，${c0.slots * slot} 分鐘）。要修改或刪除，先解鎖。")
+                .setPositiveButton("關閉", null)
+                .setNeutralButton("解鎖") { _, _ ->
+                    c0.locked = false; store.settings.putCustom(c0); render(); editCustom(day, c0, startMin)
+                }
+                .show()
+            return
+        }
+        val c = c0?.copy() ?: Custom(System.currentTimeMillis(), "", "", startMin % 1440, 1,
+            Custom.EVERY_DAY, day.toString(), false, true)
+
+        val box = vbox(20)
+        val title = EditText(this).apply {
+            hint = "要做什麼（例如：午睡、背單字、整理房間）"
+            setText(c.title); setSingleLine()
+        }
+        val note = EditText(this).apply { hint = "備註（可不填）"; setText(c.note) }
+        box.addView(title.lp(ViewGroup.LayoutParams.MATCH_PARENT))
+        box.addView(note.lp(ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // 開始時間與長度（以格為單位）
+        val timeLabel = label("", 16f, true)
+        fun showTime() { timeLabel.text = "${fmt(c.start)}–${fmt(c.start + c.slots * slot)}（${c.slots} 格，${c.slots * slot} 分鐘）" }
+        showTime()
+        box.addView(timeLabel.lp(top = 12))
+        val r1 = hbox()
+        r1.addView(label("開始", 14f).lp(0, weight = 1f))
+        r1.addView(pill("提早") { c.start = ((c.start - slot) % 1440 + 1440) % 1440; showTime() }.lp(end = 6))
+        r1.addView(pill("延後") { c.start = (c.start + slot) % 1440; showTime() })
+        box.addView(r1.lp(ViewGroup.LayoutParams.MATCH_PARENT, top = 8))
+        val r2 = hbox()
+        r2.addView(label("長度", 14f).lp(0, weight = 1f))
+        r2.addView(pill("− 1 格") { c.slots = (c.slots - 1).coerceAtLeast(1); showTime() }.lp(end = 6))
+        r2.addView(pill("＋ 1 格") { c.slots = (c.slots + 1).coerceAtMost(24); showTime() })
+        box.addView(r2.lp(ViewGroup.LayoutParams.MATCH_PARENT, top = 8))
+
+        // 重複
+        box.addView(label("重複", 14f, true).lp(top = 14))
+        val weekRow = hbox()
+        val modeRow = hbox()
+        fun paint() {
+            for (i in 0 until weekRow.childCount) {
+                val v = weekRow.getChildAt(i) as TextView
+                val on = c.days != 0 && (c.days and (1 shl i)) != 0
+                v.setTextColor(col(if (on) R.color.white else R.color.text))
+                v.background = rounded(col(if (on) R.color.brand else R.color.soft), 10f)
             }
-            "exercise" -> Alarms.walkIntent(this)?.let { i ->
-                b.setNeutralButton("打開運動 App") { _, _ -> startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            val modes = listOf(Custom.EVERY_DAY, Custom.WEEKDAYS, 0)
+            for (i in 0 until modeRow.childCount) {
+                val v = modeRow.getChildAt(i) as TextView
+                val on = c.days == modes[i]
+                v.setTextColor(col(if (on) R.color.white else R.color.text))
+                v.background = rounded(col(if (on) R.color.brand else R.color.soft), 22f)
             }
         }
-        b.show()
+        listOf("每天" to Custom.EVERY_DAY, "平日" to Custom.WEEKDAYS, "只有今天" to 0).forEach { (name, v) ->
+            modeRow.addView(pill(name) { c.days = v; if (v == 0) c.date = day.toString(); paint() }.lp(end = 6))
+        }
+        box.addView(modeRow.lp(top = 6))
+        for (i in 0..6) {
+            val t = TextView(this).apply {
+                text = WEEK[i]; gravity = Gravity.CENTER
+                setPadding(0, dpi(8), 0, dpi(8))
+                setOnClickListener {
+                    c.days = c.days xor (1 shl i)
+                    paint()
+                }
+            }
+            weekRow.addView(t.lp(0, weight = 1f, end = if (i < 6) 4 else 0))
+        }
+        box.addView(weekRow.lp(ViewGroup.LayoutParams.MATCH_PARENT, top = 8))
+        paint()
+
+        val notifySw = SwitchCompat(this).apply { text = "開始時跳通知"; isChecked = c.notify }
+        val lockSw = SwitchCompat(this).apply { text = "🔒 固定（之後要先解鎖才能改）"; isChecked = c.locked }
+        box.addView(notifySw.lp(ViewGroup.LayoutParams.MATCH_PARENT, top = 12))
+        box.addView(lockSw.lp(ViewGroup.LayoutParams.MATCH_PARENT, top = 4))
+
+        val dlg = AlertDialog.Builder(this)
+            .setTitle(if (c0 == null) "加入行程" else "修改行程")
+            .setView(ScrollView(this).apply { addView(box) })
+            .setPositiveButton("儲存") { _, _ ->
+                c.title = title.text.toString().trim()
+                c.note = note.text.toString().trim()
+                c.notify = notifySw.isChecked
+                c.locked = lockSw.isChecked
+                if (c.days == 0) c.date = day.toString()
+                store.settings.putCustom(c)
+                Alarms.scheduleNext(this); render()
+            }
+            .setNegativeButton("取消", null)
+        if (c0 != null) dlg.setNeutralButton("刪除") { _, _ ->
+            store.settings.removeCustom(c0.id); Alarms.scheduleNext(this); render()
+        }
+        dlg.show()
+    }
+
+    private fun showWhy(item: Item) {
+        val s = store.settings
+        val key = item.kind.key
+        val locked = s.locked(key)
+        val box = vbox(20)
+        box.addView(label(item.kind.body, 15f))
+        box.addView(label("為什麼：\n${item.kind.why}", 14f, colorId = R.color.text_sub).lp(top = 10))
+        var dlg: AlertDialog? = null
+        when (key) {
+            "learn" -> box.addView(pill("打開英文筆記本", true) {
+                startActivity(Alarms.engIntent(this).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); dlg?.dismiss()
+            }.lp(top = 12))
+            "exercise" -> Alarms.walkIntent(this)?.let { i ->
+                box.addView(pill("打開運動 App", true) {
+                    startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); dlg?.dismiss()
+                }.lp(top = 12))
+            }
+        }
+        val row = hbox()
+        row.addView(pill(if (locked) "🔓 解鎖" else "🔒 固定") {
+            s.setLocked(key, !locked); dlg?.dismiss(); render()
+        }.lp(end = 8))
+        if (!locked) row.addView(pill("從時間表移除") {
+            s.setEnabled(key, false); Alarms.scheduleNext(this); dlg?.dismiss(); render()
+        })
+        box.addView(row.lp(top = 14))
+        if (locked) box.addView(label("固定的項目要先解鎖才能移除。移除後可以到「設定」再打開。",
+            12f, colorId = R.color.text_sub).lp(top = 6))
+        dlg = AlertDialog.Builder(this)
+            .setTitle("${item.kind.emoji} ${item.kind.title}")
+            .setView(ScrollView(this).apply { addView(box) })
+            .setPositiveButton("知道了", null)
+            .show()
+    }
+
+    companion object {
+        val WEEK = listOf("一", "二", "三", "四", "五", "六", "日")
     }
 
     // ---------- 睡眠與精神的關係 ----------

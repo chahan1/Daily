@@ -27,6 +27,40 @@ class Settings(private val p: SharedPreferences) {
     fun enabled(kind: String) = p.getBoolean("on_$kind", true)
     fun setEnabled(kind: String, on: Boolean) = p.edit().putBoolean("on_$kind", on).apply()
 
+    /** 內建提醒是否「固定」（固定的不能從時間表移除，要先解鎖）。預設全部固定。 */
+    fun locked(kind: String) = p.getBoolean("lock_$kind", true)
+    fun setLocked(kind: String, on: Boolean) = p.edit().putBoolean("lock_$kind", on).apply()
+
+    /** 時間表一格幾分鐘：30 或 40 */
+    var slotMinutes: Int
+        get() = p.getInt("slot", 30)
+        set(v) = p.edit().putInt("slot", v).apply()
+
+    // ---------- 自訂行程 ----------
+    fun customs(): MutableList<Custom> {
+        val out = mutableListOf<Custom>()
+        try {
+            val arr = JSONArray(p.getString("customs", "[]"))
+            for (i in 0 until arr.length()) out += Custom.from(arr.getJSONObject(i))
+        } catch (e: Exception) { }
+        return out
+    }
+
+    fun saveCustoms(list: List<Custom>) {
+        val arr = JSONArray()
+        list.forEach { arr.put(it.toJson()) }
+        p.edit().putString("customs", arr.toString()).apply()
+    }
+
+    fun putCustom(c: Custom) {
+        val list = customs()
+        val i = list.indexOfFirst { it.id == c.id }
+        if (i >= 0) list[i] = c else list += c
+        saveCustoms(list)
+    }
+
+    fun removeCustom(id: Long) = saveCustoms(customs().filter { it.id != id })
+
     /** 預定可睡的時數 */
     val sleepWindowHours: Double
         get() {
@@ -34,6 +68,41 @@ class Settings(private val p: SharedPreferences) {
             if (b <= wake) b += 1440
             return (wake + 1440 - b) / 60.0
         }
+}
+
+/**
+ * 自訂行程。start＝一天中的第幾分鐘；slots＝佔幾格；
+ * days＝星期遮罩（週一 bit0 … 週日 bit6），0 代表只有 date 那一天。
+ */
+data class Custom(
+    val id: Long,
+    var title: String,
+    var note: String,
+    var start: Int,
+    var slots: Int,
+    var days: Int,
+    var date: String,
+    var locked: Boolean,
+    var notify: Boolean,
+) {
+    fun activeOn(day: LocalDate): Boolean =
+        if (days == 0) date == day.toString() else (days and (1 shl (day.dayOfWeek.value - 1))) != 0
+
+    fun toJson(): JSONObject = JSONObject()
+        .put("id", id).put("title", title).put("note", note).put("start", start)
+        .put("slots", slots).put("days", days).put("date", date)
+        .put("locked", locked).put("notify", notify)
+
+    companion object {
+        const val EVERY_DAY = 0b1111111
+        const val WEEKDAYS = 0b0011111
+
+        fun from(o: JSONObject) = Custom(
+            o.getLong("id"), o.optString("title"), o.optString("note"), o.optInt("start"),
+            o.optInt("slots", 1).coerceAtLeast(1), o.optInt("days", EVERY_DAY), o.optString("date"),
+            o.optBoolean("locked", false), o.optBoolean("notify", true)
+        )
+    }
 }
 
 /** 每天的紀錄。 */
