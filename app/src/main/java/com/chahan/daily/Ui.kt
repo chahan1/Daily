@@ -97,6 +97,19 @@ class SleepChart(ctx: Context) : View(ctx) {
         typeface = Typeface.DEFAULT_BOLD
     }
 
+    /** 點某一天的長條時呼叫（參數是第幾天，0＝最舊）。 */
+    var onPick: ((Int) -> Unit)? = null
+
+    @android.annotation.SuppressLint("ClickableViewAccessibility")
+    override fun onTouchEvent(e: android.view.MotionEvent): Boolean {
+        if (onPick == null || data.isEmpty()) return false
+        if (e.action == android.view.MotionEvent.ACTION_UP) {
+            val i = (e.x / (width.toFloat() / data.size)).toInt().coerceIn(0, data.size - 1)
+            onPick?.invoke(i)
+        }
+        return true
+    }
+
     override fun onMeasure(w: Int, h: Int) {
         setMeasuredDimension(View.MeasureSpec.getSize(w), context.dpi(150))
     }

@@ -537,13 +537,14 @@ class MainActivity : AppCompatActivity() {
     private fun statsCard(day: LocalDate) {
         val c = card()
         c.addView(label("睡眠與精神", 16f, true))
-        c.addView(label("長條＝睡了幾小時，數字＝當天精神分數（最近 14 天）", 13f,
+        c.addView(label("長條＝睡了幾小時，數字＝當天精神分數（最近 14 天）。點長條可以補正那一天。", 13f,
             colorId = R.color.text_sub).lp(top = 4))
         val chart = SleepChart(this)
-        chart.data = store.recent(day, 14).map { (d, l) ->
-            Triple(d.dayOfMonth.toString(), l.sleep, l.energy)
-        }
+        val days14 = store.recent(day, 14)
+        chart.data = days14.map { (d, l) -> Triple(d.dayOfMonth.toString(), l.sleep, l.energy) }
+        chart.onPick = { i -> editDay(days14[i].first) }
         c.addView(chart.lp(ViewGroup.LayoutParams.MATCH_PARENT, top = 8))
+        c.addView(pill("✏️ 補正前幾天的紀錄") { pickDay(day) }.lp(top = 8))
 
         val month = store.recent(day, 30).map { it.second }.filter { it.sleep >= 0 && it.energy > 0 }
         val enough = month.filter { it.sleep >= 7 }
@@ -558,5 +559,110 @@ class MainActivity : AppCompatActivity() {
         }
         c.addView(label(text, 14f).lp(top = 8))
         root.addView(c)
+    }
+
+    // ---------- 補正前幾天的紀錄 ----------
+    private fun dayName(d: LocalDate) = d.format(DateTimeFormatter.ofPattern("M/d（EEEEE）", Locale.TAIWAN))
+
+    /** 列出最近 30 天（昨天在最上面），點一天就打開補正視窗。 */
+    private fun pickDay(today: LocalDate) {
+        val box = vbox(12)
+        var dlg: AlertDialog? = null
+        for (i in 1..30) {
+            val d = today.minusDays(i.toLong())
+            val l = store.log(d)
+            val sleep = if (l.sleep >= 0) "睡 %.1f 小時".format(l.sleep) else "睡眠未填"
+            val energy = if (l.energy > 0) "精神 ${l.energy}" else "精神未填"
+            val missing = l.sleep < 0 || l.energy == 0
+            val row = hbox()
+            row.setPadding(dpi(10), dpi(10), dpi(10), dpi(10))
+            row.addView(label(dayName(d), 15f, true).apply { minWidth = dpi(96) })
+            row.addView(label("$sleep・$energy", 14f,
+                colorId = if (missing) R.color.text_sub else R.color.text).lp(0, weight = 1f))
+            row.addView(label("›", 18f, colorId = R.color.text_sub))
+            row.setOnClickListener { dlg?.dismiss(); editDay(d) }
+            box.addView(row.lp(ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        dlg = AlertDialog.Builder(this)
+            .setTitle("要補正哪一天？")
+            .setView(ScrollView(this).apply { addView(box) })
+            .setNegativeButton("關閉", null)
+            .show()
+    }
+
+    /** 修改某一天的睡眠、精神、計畫和已完成項目。按「儲存」才寫入。 */
+    private fun editDay(d: LocalDate) {
+        val log = store.log(d)
+        var sleep = log.sleep
+        var energy = log.energy
+        val done = log.done.toMutableSet()
+        val box = vbox(20)
+
+        // 睡眠
+        box.addView(label("前一晚睡了幾小時", 15f, true))
+        val value = label("", 24f, true).apply { gravity = Gravity.CENTER; minWidth = dpi(90) }
+        fun showSleep() { value.text = if (sleep >= 0) "%.1f".format(sleep) else "未填" }
+        val sRow = hbox()
+        sRow.addView(pill("−") {
+            sleep = if (sleep < 0) store.lastSleep(d) else (sleep - 0.5).coerceAtLeast(0.0); showSleep()
+        })
+        sRow.addView(value)
+        sRow.addView(pill("＋") {
+            sleep = if (sleep < 0) store.lastSleep(d) else (sleep + 0.5).coerceAtMost(14.0); showSleep()
+        }.lp(end = 8))
+        sRow.addView(pill("清除") { sleep = -1.0; showSleep() })
+        showSleep()
+        box.addView(sRow.lp(top = 6))
+
+        // 精神
+        box.addView(label("那天的精神（再點一次可清除）", 15f, true).lp(top = 16))
+        val eRow = hbox()
+        fun paintEnergy() {
+            for (i in 0 until eRow.childCount) {
+                val v = eRow.getChildAt(i) as TextView
+                val on = energy == i + 1
+                v.setTextColor(col(if (on) R.color.white else R.color.text))
+                v.background = rounded(col(if (on) R.color.brand else R.color.soft), 12f)
+            }
+        }
+        for (i in 1..5) {
+            eRow.addView(TextView(this).apply {
+                text = "$i"; gravity = Gravity.CENTER
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+                setPadding(0, dpi(10), 0, dpi(10))
+                setOnClickListener { energy = if (energy == i) 0 else i; paintEnergy() }
+            }.lp(0, weight = 1f, end = if (i < 5) 6 else 0))
+        }
+        paintEnergy()
+        box.addView(eRow.lp(ViewGroup.LayoutParams.MATCH_PARENT, top = 6))
+
+        // 如果…就…
+        box.addView(label("那天的「如果…就…」", 15f, true).lp(top = 16))
+        val plan = EditText(this).apply { setText(log.plan); hint = "（沒寫可留白）" }
+        box.addView(plan.lp(ViewGroup.LayoutParams.MATCH_PARENT))
+
+        // 完成的項目
+        box.addView(label("完成了哪些", 15f, true).lp(top = 16))
+        val items = Reminders.itemsFor(d, store.settings)
+        if (items.isEmpty()) box.addView(label("這天沒有項目", 13f, colorId = R.color.text_sub))
+        items.forEach { item ->
+            box.addView(android.widget.CheckBox(this).apply {
+                text = "${item.kind.emoji} ${item.kind.title}  ${item.at.format(DateTimeFormatter.ofPattern("HH:mm"))}"
+                isChecked = item.key in done
+                setOnCheckedChangeListener { _, on -> if (on) done += item.key else done -= item.key }
+            }.lp(ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("補正 ${dayName(d)}")
+            .setView(ScrollView(this).apply { addView(box) })
+            .setPositiveButton("儲存") { _, _ ->
+                val p = plan.text.toString()
+                // 項目清單以外的舊紀錄（例如已刪除的行程）保留不動
+                store.save(d, DayLog(sleep, energy, p, done))
+                render()
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 }
